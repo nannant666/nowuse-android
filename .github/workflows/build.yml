@@ -1,0 +1,87 @@
+name: Android Build
+
+on:
+    workflow_dispatch:
+
+permissions:
+    contents: write
+
+jobs:
+    build:
+        name: Build APK
+        runs-on: ubuntu-latest
+        timeout-minutes: 40
+        steps:
+            - name: Checkout Repository
+              uses: actions/checkout@v4
+
+            - name: Set up JDK 17
+              uses: actions/setup-java@v4
+              with:
+                  distribution: 'temurin'
+                  java-version: '17'
+                  cache: gradle
+
+            - name: Set up Android SDK
+              uses: android-actions/setup-android@v4
+              with:
+                  packages: 'platform-tools'
+
+            - uses: pnpm/action-setup@v4
+              with:
+                  version: 10
+
+            - name: Sync node version and setup cache
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 22.14.0
+                  cache: pnpm
+
+            - name: Install ImageMagick
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y imagemagick
+
+            - name: Restore signing keystore
+              run: |
+                  echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 -d > scripts/pakeplus.txt
+                  ls -l scripts/pakeplus.txt
+
+            - name: Inject app version into start page
+              run: |
+                  V=$(node -p "require('./scripts/ppconfig.json').android.version")
+                  sed -i "s/__APP_VERSION__/$V/g" scripts/www/index.html
+                  echo "start page version: $V"
+
+            - name: Init Project Config
+              run: |
+                  pnpm install
+                  pnpm pp:worker
+
+            - name: Grant Execute Permission for Gradle
+              run: chmod +x ./gradlew
+
+            - name: Build Release APK
+              env:
+                  NOWUSE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+                  NOWUSE_KEY_ALIAS: 'nowuse'
+              run: ./gradlew assembleRelease --no-daemon
+
+            - name: Collect APK
+              run: |
+                  mkdir -p out
+                  cp app/build/outputs/apk/release/*.apk "out/${{ env.NAME }}-v${{ env.VERSION }}.apk"
+                  ls -lh out
+
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: NowuseAI-Android
+                  path: out/*.apk
+                  if-no-files-found: error
+
+            - name: Create GitHub Release
+              uses: softprops/action-gh-release@v2
+              with:
+                  files: out/*.apk
+                  tag_name: 'android-v${{ env.VERSION }}'
+                  name: 'Nowuse AI Android v${{ env.VERSION }}'
